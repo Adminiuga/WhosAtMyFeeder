@@ -16,9 +16,19 @@ jobs:
     with:
       PYTHON_VERSION_DEFAULT: "3.11"
   
+  debug:
+    name: check the triggers
+    runs-on: ubuntu-latest
+    steps:
+      - name: events
+        run: |
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "github.ref_name: ${{ github.ref_name }}"
+          echo "github.event: ${{ github.event }}"
+  
   docker_build:
     name: Build docker image
-    if: ${{ github.event_name == 'release' || (github.event_name == 'push' && github.reg_name == 'dev') }}
+    if: ${{ github.event_name == 'release' || (github.event_name == 'push' && github.ref_name == 'dev') }}
     runs-on: ubuntu-latest
     permissions:
       packages: write
