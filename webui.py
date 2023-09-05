@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 import requests
@@ -12,6 +13,8 @@ from queries import (
     get_records_for_scientific_name_and_date,
     recent_detections,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 app = Flask(__name__)
 config = None
@@ -60,7 +63,7 @@ def frigate_thumbnail(frigate_event):
             # Return the single transparent pixel image from the local file if the actual image is not found
             return send_from_directory("static/images", "1x1.png", mimetype="image/png")
     except Exception as e:
-        print(f"Error fetching image from frigate: {e}", flush=True)
+        _LOGGER.error("Error fetching image from frigate: %s", e)
         abort(500)
 
 
@@ -69,9 +72,14 @@ def frigate_snapshot(frigate_event):
     frigate_url = config["frigate"]["frigate_url"]
     try:
         # Fetch the image from frigate
-        print("Getting snapshot from Frigate", flush=True)
         response = requests.get(
             f"{frigate_url}/api/events/{frigate_event}/snapshot.jpg", stream=True
+        )
+
+        _LOGGER.debug(
+            "Getting %s event snapshot from Frigate: %s",
+            frigate_event,
+            response.status_code,
         )
 
         if response.status_code == 200:
@@ -82,7 +90,7 @@ def frigate_snapshot(frigate_event):
             return send_from_directory("static/images", "1x1.png", mimetype="image/png")
     except Exception as e:
         # If there's any issue fetching the image, return a 500 error
-        print(f"Error fetching image from frigate: {e}", flush=True)
+        _LOGGER.error("Error fetching image from frigate: %s", e)
         abort(500)
 
 
@@ -91,9 +99,13 @@ def frigate_clip(frigate_event):
     frigate_url = config["frigate"]["frigate_url"]
     try:
         # Fetch the clip from frigate
-        print("Getting snapshot from Frigate", flush=True)
         response = requests.get(
             f"{frigate_url}/api/events/{frigate_event}/clip.mp4", stream=True
+        )
+        _LOGGER.debug(
+            "Getting %s event clip from Frigate: %s",
+            frigate_event,
+            response.status_code,
         )
 
         if response.status_code == 200:
@@ -104,7 +116,7 @@ def frigate_clip(frigate_event):
             return send_from_directory("static/images", "1x1.png", mimetype="image/png")
     except Exception as e:
         # If there's any issue fetching the image, return a 500 error
-        print(f"Error fetching clip from frigate: {e}", flush=True)
+        _LOGGER.error("Error fetching clip from frigate: %s", e)
         abort(500)
 
 

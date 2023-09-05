@@ -1,14 +1,17 @@
+import logging
 import sqlite3
 from collections import defaultdict
 
 DBPATH = "./data/speciesid.db"
 NAMEDBPATH = "./birdnames.db"
+_LOGGER = logging.getLogger(__name__)
 
 
 def get_common_name(scientific_name):
     conn = sqlite3.connect(NAMEDBPATH)
     cursor = conn.cursor()
 
+    _LOGGER.debug("checking for '%s' common name", scientific_name)
     cursor.execute(
         "SELECT common_name FROM birdnames WHERE scientific_name = ?",
         (scientific_name,),
@@ -20,7 +23,7 @@ def get_common_name(scientific_name):
     if result:
         return result[0]
     else:
-        print("No common name for: " + scientific_name, flush=True)
+        _LOGGER.warning("No common name for: %s" + scientific_name)
         return "No common name found."
 
 

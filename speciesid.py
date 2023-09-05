@@ -1,4 +1,5 @@
 import json
+import logging
 import multiprocessing
 import sqlite3
 import sys
@@ -23,6 +24,14 @@ firstmessage = True
 DBPATH = "./data/speciesid.db"
 DEFAULT_MQTT_PORT = 1833
 DEFAULT_INSECURE_TLS = False
+LOGGER_FMT = (
+    "%(asctime)s.%(msecs)03d %(levelname)s (%(threadName)s) [%(name)s] %(message)s"
+)
+LOGGER_DATE_FMT = "%Y-%m-%d %H:%M:%S"
+LOGGER_DEFAULT_LEVEL = logging.INFO
+
+logging.basicConfig(format=LOGGER_FMT, datefmt=LOGGER_DATE_FMT)
+_LOGGER = logging.getLogger(__name__)
 
 
 def classify(image):
@@ -34,7 +43,7 @@ def classify(image):
 
 
 def on_connect(client, userdata, flags, rc):
-    print("MQTT Connected", flush=True)
+    _LOGGER.debug("MQTT Connected")
 
     # we are going subscribe to frigate/events and look for bird detections there
     client.subscribe(config["frigate"]["main_topic"] + "/events")
@@ -42,19 +51,18 @@ def on_connect(client, userdata, flags, rc):
 
 def on_disconnect(client, userdata, rc):
     if rc != 0:
-        print("Unexpected disconnection, trying to reconnect", flush=True)
+        _LOGGER.warning("Unexpected mqtt disconnection: %s, trying to reconnect", rc)
         while True:
             try:
                 client.reconnect()
                 break
             except Exception as e:
-                print(
-                    f"Reconnection failed due to {e}, retrying in 60 seconds",
-                    flush=True,
+                _LOGGER.error(
+                    "Reconnection failed due to %s, retrying in 60 seconds", e
                 )
                 time.sleep(60)
     else:
-        print("Expected disconnection", flush=True)
+        _LOGGER.info("MQTT Expected disconnection: %s", rc)
 
 
 def set_sublabel(frigate_url, frigate_event, sublabel):
@@ -75,9 +83,9 @@ def set_sublabel(frigate_url, frigate_event, sublabel):
 
     # Check for a successful response
     if response.status_code == 200:
-        print("Sublabel set successfully to: " + sublabel, flush=True)
+        _LOGGER.debug("Sublabel set successfully to: %s", sublabel)
     else:
-        print("Failed to set sublabel. Status code:", response.status_code, flush=True)
+        _LOGGER.warning("Failed to set sublabel. Status code: %s", response.status_code)
 
 
 def on_message(client, userdata, message):
@@ -90,6 +98,7 @@ def on_message(client, userdata, message):
 
         # Extract the 'after' element data and store it in a dictionary
         after_data = payload_dict.get("after", {})
+        _LOGGER.debug("mqtt event: %s", after_data)
 
         if (
             after_data["camera"] in config["frigate"]["camera"]
@@ -101,11 +110,15 @@ def on_message(client, userdata, message):
                 frigate_url + "/api/events/" + frigate_event + "/snapshot.jpg"
             )
 
-            print("Getting image for event: " + frigate_event, flush=True)
-            print("Here's the URL: " + snapshot_url, flush=True)
+            _LOGGER.info(
+                "Getting image for event: %s from %s", frigate_event, snapshot_url
+            )
             # Send a GET request to the snapshot_url
             params = {"crop": 1, "quality": 95}
             response = requests.get(snapshot_url, params=params)
+
+            _LOGGER.debug("Getting snapshot '%s' status_code: %d", response.status_code)
+
             # Check if the request was successful (HTTP status code 200)
             if response.status_code == 200:
                 # Open the image from the response content and convert it to a NumPy array
@@ -144,11 +157,12 @@ def on_message(client, userdata, message):
                 display_name = category.display_name
                 category_name = category.category_name
 
-                start_time = datetime.fromtimestamp(after_data["start_time"])
-                formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
-                result_text = formatted_start_time + "\n"
-                result_text = result_text + str(category)
-                print(result_text, flush=True)
+                _LOGGER.info(
+                    "Snapshot index: %s, score: %s, category: %s",
+                    index,
+                    score,
+                    category,
+                )
 
                 if (
                     index != 964 and score > config["classification"]["threshold"]
@@ -164,7 +178,9 @@ def on_message(client, userdata, message):
 
                     if result is None:
                         # Insert a new record if it doesn't exist
-                        print("No record yet for this event. Storing.", flush=True)
+                        _LOGGER.debug(
+                            "No record yet for '%s' event. Storing.", frigate_event
+                        )
                         cursor.execute(
                             """  
                             INSERT INTO detections (detection_time, detection_index, score,  
@@ -185,16 +201,16 @@ def on_message(client, userdata, message):
                             frigate_url, frigate_event, get_common_name(display_name)
                         )
                     else:
-                        print(
-                            "There is already a record for this event. Checking score",
-                            flush=True,
+                        _LOGGER.debug(
+                            "There is already a record for '%s' event. Checking score",
+                            frigate_event,
                         )
                         # Update the existing record if the new score is higher
                         existing_score = result[3]
                         if score > existing_score:
-                            print(
-                                "New score is higher. Updating record with higher score.",
-                                flush=True,
+                            _LOGGER.debug(
+                                "New score for '%s' event is higher. Updating record with higher score.",
+                                frigate_event,
                             )
                             cursor.execute(
                                 """  
@@ -218,25 +234,28 @@ def on_message(client, userdata, message):
                                 get_common_name(display_name),
                             )
                         else:
-                            print("New score is lower.", flush=True)
+                            _LOGGER.debug(
+                                "New score for '%s' event is lower.", frigate_event
+                            )
 
                     # Commit the changes
                     conn.commit()
 
             else:
-                print(
-                    f"Error: Could not retrieve the image. Status code: {response.status_code}",
-                    flush=True,
+                _LOGGER.error(
+                    "Error: Could not retrieve the image. Status code: %s",
+                    response.status_code,
                 )
 
     else:
         firstmessage = False
-        print("skipping first message", flush=True)
+        _LOGGER.debug("skipping first message")
 
     conn.close()
 
 
 def setupdb():
+    _LOGGER.debug("Setting up '%s' database", DBPATH)
     conn = sqlite3.connect(DBPATH)
     cursor = conn.cursor()
     cursor.execute(
@@ -266,15 +285,18 @@ def load_config():
 
 
 def run_webui():
-    print("Starting flask app", flush=True)
-    app.run(debug=False, host=config["webui"]["host"], port=config["webui"]["port"])
+    host = config["webui"]["host"]
+    port = config["webui"]["port"]
+    _LOGGER.info("Starting flask app for '%s' host and %s port", flush=True)
+    app.run(debug=False, host=host, port=port)
 
 
 def run_mqtt_client():
-    print(
-        "Starting MQTT client. Connecting to: " + config["frigate"]["mqtt_server"],
-        flush=True,
-    )
+    mqtt_host = config["frigate"]["mqtt_server"]
+    mqtt_port = config["frigate"].get("mqtt_port", DEFAULT_MQTT_PORT)
+
+    _LOGGER.info("Starting MQTT client. Connecting to: %s:%s", mqtt_host, mqtt_port)
+
     now = datetime.now()
     current_time = now.strftime("%Y%m%d%H%M%S")
     client = mqtt.Client("birdspeciesid" + current_time)
@@ -287,7 +309,6 @@ def run_mqtt_client():
         password = config["frigate"]["mqtt_password"]
         client.username_pw_set(username, password)
 
-    mqtt_port = config["frigate"].get("mqtt_port", DEFAULT_MQTT_PORT)
     if config["frigate"].get("mqtt_use_tls", False):
         ca_certs = config["frigate"].get("mqtt_tls_ca_certs")
         client.tls_set(ca_certs)
@@ -300,21 +321,24 @@ def run_mqtt_client():
 
 
 def main():
-    now = datetime.now()
-    current_time = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-    print("Time: " + current_time, flush=True)
-    print("Python version", flush=True)
-    print(sys.version, flush=True)
-    print("Version info.", flush=True)
-    print(sys.version_info, flush=True)
+    _LOGGER.info("Python version: %s, Version info: %s", sys.version, sys.version_info)
 
     load_config()
+    log_level = config.get("logging", {}).get("default")
+    if log_level is not None:
+        try:
+            logging.getLogger("").setLevel(log_level.upper())
+        except ValueError:
+            _LOGGER.error(
+                "Unknown '%s' default logging level. Check the configuration file",
+                log_level,
+            )
 
     # Initialize the image classification model
-    base_options = core.BaseOptions(
-        file_name=config["classification"]["model"], use_coral=False, num_threads=4
-    )
+    model = config["classification"]["model"]
+    _LOGGER.debug("Initializing '%s' model", model)
+
+    base_options = core.BaseOptions(file_name=model, use_coral=False, num_threads=4)
 
     # Enable Coral by this setting
     classification_options = processor.ClassificationOptions(
@@ -330,7 +354,7 @@ def main():
 
     # setup database
     setupdb()
-    print("Starting threads for Flask and MQTT", flush=True)
+    _LOGGER.info("Starting threads for Flask and MQTT")
     flask_process = multiprocessing.Process(target=run_webui)
     mqtt_process = multiprocessing.Process(target=run_mqtt_client)
 
@@ -342,5 +366,5 @@ def main():
 
 
 if __name__ == "__main__":
-    print("Calling Main", flush=True)
+    _LOGGER.debug("Calling Main")
     main()
